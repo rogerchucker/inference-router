@@ -1,5 +1,9 @@
-FROM ghcr.io/astral-sh/uv:0.11.20 AS uv
-FROM python:3.12-slim
+# App CI reads these defaults before installing its toolchain.
+ARG PYTHON_VERSION=3.12
+ARG UV_VERSION=0.11.20
+
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
+FROM python:${PYTHON_VERSION}-slim
 COPY --from=uv /uv /usr/local/bin/uv
 WORKDIR /app
 COPY pyproject.toml uv.lock ./

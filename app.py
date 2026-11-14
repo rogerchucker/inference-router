@@ -10,7 +10,13 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from providers import ChatProvider, ClaudeProvider, DemoProvider, JevClassifier
-from router import InferenceFailed, InferenceRequest, InferenceResponse, Router, RoutingPolicy
+from router import (
+    InferenceFailed,
+    InferenceRequest,
+    InferenceResponse,
+    Router,
+    RoutingPolicy,
+)
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -32,7 +38,14 @@ def ollama_url() -> str:
 
 
 def configure_router(client: httpx.AsyncClient) -> Router:
+    mode = os.getenv("ROUTER_MODE", "local")
+    if mode not in {"local", "eks"}:
+        raise ValueError("ROUTER_MODE must be local or eks")
+
     fault = os.getenv("DEMO_PRIMARY_FAULT")
+    if mode == "eks" and (fault is not None or "MODEL_BASE_URL" in os.environ):
+        raise ValueError("ROUTER_MODE=eks excludes DEMO_PRIMARY_FAULT and MODEL_BASE_URL")
+
     if fault is not None:
         if fault not in {"none", "unavailable", "timeout", "rejected"}:
             raise ValueError("DEMO_PRIMARY_FAULT must be none, unavailable, timeout, or rejected")
@@ -44,10 +57,12 @@ def configure_router(client: httpx.AsyncClient) -> Router:
             attempt_timeout=timeout_setting("PROVIDER_TIMEOUT_SECONDS", "0.75"),
         )
 
-    local = ChatProvider(
-        "ollama", "qwen3.5:4b", ollama_url(), client,
-        reasoning_effort=os.getenv("MODEL_REASONING_EFFORT", "none"),
-    )
+    local = None
+    if mode == "local":
+        local = ChatProvider(
+            "ollama", "qwen3.5:4b", ollama_url(), client,
+            reasoning_effort=os.getenv("MODEL_REASONING_EFFORT", "none"),
+        )
     openai_key = os.getenv("OPENAI_API_KEY")
     anthropic_key = os.getenv("ANTHROPIC_API_KEY")
     openrouter_key = os.getenv("OPENROUTER_API_KEY")
@@ -65,7 +80,7 @@ def configure_router(client: httpx.AsyncClient) -> Router:
         classifier_timeout=timeout_setting("CLASSIFIER_TIMEOUT_SECONDS", "2.0"),
     )
     return Router(
-        local, None,
+        None, None,
         total_timeout=timeout_setting("ROUTER_TIMEOUT_SECONDS", "60.0"),
         attempt_timeout=timeout_setting("PROVIDER_TIMEOUT_SECONDS", "25.0"),
         policy=policy,

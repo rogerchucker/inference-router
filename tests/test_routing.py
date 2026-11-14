@@ -186,3 +186,50 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "loopback"):
             await self.infer()
         self.assertEqual(self.hosts(), [])
+
+    async def test_eks_rejects_demo_and_ollama_configuration(self):
+        for name, value in (("DEMO_PRIMARY_FAULT", "none"), ("MODEL_BASE_URL", "")):
+            with self.subTest(name=name), patch.dict(os.environ, {
+                "ROUTER_MODE": "eks",
+                name: value,
+            }, clear=True), self.assertRaisesRegex(ValueError, "ROUTER_MODE=eks"):
+                configure_router(self.client)
+        self.assertEqual(self.hosts(), [])
+
+    async def test_rejects_unknown_router_mode(self):
+        with (
+            patch.dict(os.environ, {"ROUTER_MODE": "ekz"}, clear=True),
+            self.assertRaisesRegex(ValueError, "ROUTER_MODE must be local or eks"),
+        ):
+            configure_router(self.client)
+        self.assertEqual(self.hosts(), [])
+
+    async def test_eks_routes_cloud_tasks_without_ollama(self):
+        self.environment["ROUTER_MODE"] = "eks"
+        for task, provider, host in [
+            ("simple", "claude", "api.anthropic.com"),
+            ("writing", "claude", "api.anthropic.com"),
+            ("coding", "openai", "api.openai.com"),
+            ("reasoning", "openai", "api.openai.com"),
+        ]:
+            with self.subTest(task=task):
+                self.requests.clear()
+                result = await self.infer(allow_cloud=True, task=task)
+                self.assertEqual((result.provider, self.hosts()), (provider, [host]))
+
+    async def test_eks_auto_uses_cloud_fallback_with_low_confidence(self):
+        self.environment["ROUTER_MODE"] = "eks"
+        self.jev_response("coding", 0.79)
+        self.responses["api.anthropic.com"] = httpx.Response(429)
+        result = await self.infer(allow_cloud=True)
+        self.assertEqual((result.provider, result.attempts), ("openai", 2))
+        self.assertEqual(result.routing_reason, "classifier_low_confidence")
+        self.assertEqual(self.hosts(), ["openrouter.ai", "api.anthropic.com", "api.openai.com"])
+
+    async def test_eks_with_no_generators_returns_503(self):
+        self.environment = {"ROUTER_MODE": "eks"}
+        with self.assertRaises(InferenceFailed) as context:
+            await self.infer(allow_cloud=True)
+        self.assertEqual(context.exception.status, 503)
+        self.assertEqual(context.exception.code, "providers_unavailable")
+        self.assertEqual(self.hosts(), [])

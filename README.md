@@ -53,6 +53,12 @@ The default `max_tokens` is 1,024, with a limit of 4,096. Reasoning models can u
 
 The `attempts` field counts generation attempts. Latency includes classification. Usage describes the successful generator response, and cost estimates come from the demo provider rates. A timed-out request can still incur upstream charges. [Jev Decisions API](https://openrouter.ai/blog/insights/what-is-jev/) · [Claude Messages API](https://platform.claude.com/docs/en/api/messages/create) · [OpenAI model](https://developers.openai.com/api/docs/models/gpt-6-astra)
 
+## Run in EKS mode
+
+Set `ROUTER_MODE=eks` and supply the enabled cloud providers' credentials through the environment. Leave `MODEL_BASE_URL` and `DEMO_PRIMARY_FAULT` unset. EKS mode creates no Ollama adapter.
+
+With `allow_cloud` omitted or set to `false`, inference returns HTTP 422 with `local_inference_unavailable` before any outbound request. With cloud use enabled, simple and writing tasks try Claude then OpenAI. Coding and reasoning tasks try OpenAI then Claude. `auto` uses Jev. If classification is unavailable or uncertain, the router uses the simple route.
+
 ## Run the deterministic demo and tests
 
 For the interview demo, start the service with simulated providers. Send the same local request shown above.
@@ -66,8 +72,13 @@ The response reports `primary` and one attempt. To demonstrate failover, restart
 Run the tests from this directory.
 
 ```bash
+uv run --locked ruff check .
 uv run --locked python -m unittest discover -s tests -v
 ```
+
+The [GitHub Actions workflow](.github/workflows/app-ci.yml) runs lint, tests, and Docker smoke checks on pull requests and pushes to `main`. The smoke checks exercise demo and EKS modes without cloud credentials.
+
+The `PYTHON_VERSION` and `UV_VERSION` defaults in the [Dockerfile](Dockerfile) set the toolchain for both App CI and the container build.
 
 ## Practice a Kubernetes rollback
 

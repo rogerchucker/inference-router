@@ -13,13 +13,25 @@ from router import InferenceFailed, InferenceRequest, Router
 
 
 @asynccontextmanager
-async def api_client(environment=None):
+async def api_client(environment=None, upstream_transport=None):
+    lifespan = (
+        app.router.lifespan_context(app)
+        if upstream_transport is None
+        else mocked_lifespan(upstream_transport)
+    )
     with patch.dict(os.environ, environment or {}, clear=True):
-        async with app.router.lifespan_context(app):
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://router.test"
-            ) as client:
-                yield client
+        async with lifespan, httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://router.test"
+        ) as client:
+            yield client
+
+
+@asynccontextmanager
+async def mocked_lifespan(transport):
+    async with httpx.AsyncClient(transport=transport) as upstream:
+        with patch("app.configure_router", side_effect=lambda _: configure_router(upstream)):
+            async with app.router.lifespan_context(app):
+                yield
 
 
 class APITests(unittest.IsolatedAsyncioTestCase):
@@ -53,6 +65,32 @@ class APITests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(response.json()["attempts"], 2)
                 else:
                     self.assertTrue(response.headers["X-Request-ID"])
+
+    async def test_eks_rejects_cloud_disabled_without_outbound_requests(self):
+        outbound = []
+
+        def respond(request):
+            outbound.append(request)
+            raise AssertionError("Cloud-disabled requests must make zero outbound calls")
+
+        environment = {
+            "ROUTER_MODE": "eks",
+            "OPENAI_API_KEY": "test-openai",
+            "ANTHROPIC_API_KEY": "test-claude",
+            "OPENROUTER_API_KEY": "test-openrouter",
+        }
+        with patch("app.ollama_url", side_effect=AssertionError("Ollama configured in EKS mode")):
+            async with api_client(environment, httpx.MockTransport(respond)) as client:
+                for task in ("auto", "simple", "writing", "coding", "reasoning"):
+                    for fields in ({}, {"allow_cloud": False}):
+                        with self.subTest(task=task, fields=fields):
+                            response = await client.post(
+                                "/v1/infer", json={"prompt": "private", "task": task, **fields}
+                            )
+                            self.assertEqual(response.status_code, 422)
+                            self.assertEqual(response.json(), {"detail": "local_inference_unavailable"})
+                            self.assertTrue(response.headers["X-Request-ID"])
+        self.assertEqual(outbound, [])
 
 
 class RouterTests(unittest.IsolatedAsyncioTestCase):

@@ -1,0 +1,81 @@
+name: App CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read toolchain versions from Dockerfile
+        id: toolchain
+        shell: bash
+        run: |
+          python_version=$(sed -n 's/^ARG PYTHON_VERSION=//p' Dockerfile)
+          uv_version=$(sed -n 's/^ARG UV_VERSION=//p' Dockerfile)
+          if [[ ! "$python_version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ||
+                ! "$uv_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo 'Dockerfile must declare one numeric Python version and one uv version.' >&2
+            exit 1
+          fi
+          printf 'python=%s\nuv=%s\n' "$python_version" "$uv_version" >> "$GITHUB_OUTPUT"
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ steps.toolchain.outputs.uv }}
+          python-version: ${{ steps.toolchain.outputs.python }}
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --locked
+      - name: Lint
+        run: uv run --locked ruff check .
+      - name: Test
+        run: uv run --locked python -m unittest discover -s tests -v
+      - name: Build the router image
+        run: docker build --tag inference-router:ci .
+      - name: Smoke-test demo and EKS modes
+        shell: bash
+        run: |
+          start_router() {
+            container=$(docker run --detach -p 127.0.0.1::8080 "$@" inference-router:ci)
+            address=$(docker port "$container" 8080/tcp)
+            curl --fail --silent --show-error --retry 20 --retry-all-errors \
+              --retry-delay 1 --max-time 2 "http://$address/readyz" |
+              jq -e '.status == "ready"'
+          }
+
+          cleanup() {
+            if [[ -n "${container:-}" ]]; then
+              docker logs "$container" || true
+              docker rm -f "$container" >/dev/null || true
+            fi
+          }
+          response=$(mktemp)
+          trap 'cleanup; rm -f "$response"' EXIT
+
+          start_router -e DEMO_PRIMARY_FAULT=none
+          curl --fail --silent --show-error --max-time 5 "http://$address/v1/infer" \
+            -H 'Content-Type: application/json' -d '{"prompt":"CI smoke"}' |
+            jq -e '.provider == "primary" and .attempts == 1 and (.text | length > 0)'
+          cleanup
+          container=
+
+          start_router -e ROUTER_MODE=eks
+          for payload in '{"prompt":"CI smoke"}' '{"prompt":"CI smoke","allow_cloud":false}'; do
+            status=$(curl --silent --show-error --max-time 5 --output "$response" \
+              --write-out '%{http_code}' "http://$address/v1/infer" \
+              -H 'Content-Type: application/json' -d "$payload")
+            test "$status" = 422
+            jq -e '.detail == "local_inference_unavailable"' "$response"
+          done

@@ -62,7 +62,7 @@ class Classifier(Protocol):
 
 @dataclass(frozen=True)
 class RoutingPolicy:
-    local: Provider
+    local: Provider | None
     claude: Provider | None = None
     openai: Provider | None = None
     classifier: Classifier | None = None
@@ -72,11 +72,14 @@ class RoutingPolicy:
         self, request: InferenceRequest, remaining: float
     ) -> tuple[tuple[Provider | None, ...], str]:
         if not request.allow_cloud:
+            if self.local is None:
+                raise InferenceFailed(422, "local_inference_unavailable")
             return (self.local,), "local_only"
 
         task, reason = await self.resolve_task(request, remaining)
+        simple = (self.claude, self.openai) if self.local is None else (self.local, self.claude)
         candidates = {
-            "simple": (self.local, self.claude),
+            "simple": simple,
             "writing": (self.claude, self.openai),
             "coding": (self.openai, self.claude),
             "reasoning": (self.openai, self.claude),
@@ -109,7 +112,7 @@ class InferenceFailed(Exception):
 
 @dataclass(frozen=True)
 class Router:
-    primary: Provider
+    primary: Provider | None
     backup: Provider | None
     total_timeout: float
     attempt_timeout: float
