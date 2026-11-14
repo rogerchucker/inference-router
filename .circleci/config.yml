@@ -1,0 +1,45 @@
+version: 2.1
+
+jobs:
+  test:
+    docker:
+      - image: ghcr.io/astral-sh/uv:0.11.20-python3.12-trixie-slim
+    steps:
+      - checkout
+      - run:
+          name: Run router and API tests
+          command: uv run --locked python -m unittest discover -s tests -v
+
+  build-and-smoke:
+    machine:
+      image: ubuntu-2404:2026.10.1
+    resource_class: medium
+    steps:
+      - checkout
+      - run:
+          name: Build and smoke-test the release candidate
+          command: |
+            image="model-router:${CIRCLE_SHA1}"
+            docker build --tag "$image" .
+            container=$(docker run -d -e DEMO_PRIMARY_FAULT=none -p 127.0.0.1::8080 "$image")
+            trap 'docker logs "$container"; docker rm -f "$container" >/dev/null' EXIT
+            address=$(docker port "$container" 8080/tcp)
+            curl --fail --silent --show-error --retry 20 --retry-all-errors \
+              --retry-delay 1 --max-time 2 "http://$address/readyz"
+            curl --fail --silent --show-error "http://$address/v1/infer" \
+              -H 'Content-Type: application/json' \
+              -d '{"prompt":"Smoke test"}' \
+              | jq -e '.provider == "primary" and .attempts == 1 and (.text | length > 0)'
+            mkdir -p /tmp/release
+            docker image inspect "$image" --format '{{.Id}}' > /tmp/release/image-id.txt
+            docker save "$image" | gzip > /tmp/release/model-router.tar.gz
+      - store_artifacts:
+          path: /tmp/release
+
+workflows:
+  verify:
+    jobs:
+      - test
+      - build-and-smoke:
+          requires:
+            - test
