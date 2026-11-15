@@ -6,3 +6,10 @@ __pycache__/
 .sf/
 *.swp
 /INTERVIEW-PREP.md
+
+# Terraform working data
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfplan
