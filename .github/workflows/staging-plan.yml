@@ -1,7 +1,12 @@
-name: Staging Terraform Plan
+name: Staging Terraform
 
 on:
   workflow_dispatch:
+    inputs:
+      approved_review_run:
+        description: "Approved initial staging plan run ID. Leave blank for plan only."
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -16,6 +21,8 @@ jobs:
     environment: staging-plan
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    outputs:
+      checksum: ${{ steps.review.outputs.checksum }}
     permissions:
       contents: read
       id-token: write
@@ -23,11 +30,22 @@ jobs:
       TF_IN_AUTOMATION: "true"
       STATE_BUCKET: ${{ vars.TERRAFORM_STATE_BUCKET }}
       AWS_REGION: ${{ vars.AWS_REGION }}
+      APPROVED_REVIEW_RUN: ${{ inputs.approved_review_run }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Check initial apply approval
+        if: inputs.approved_review_run != ''
+        shell: bash
+        run: |
+          # This gate authorizes only the six creates reviewed in run 43668003653.
+          test "$GITHUB_ACTOR_ID" = "335912"
+          test "$GITHUB_RUN_ATTEMPT" = "1"
+          test "$APPROVED_REVIEW_RUN" = "43668003653"
+          test "$(git rev-parse HEAD:infra/environments/staging)" = "88eda6d6356a6418001b2d4b0807b3d4c1b9d21d"
+          test "$(git rev-parse HEAD:infra/modules/eks-control-plane)" = "72fe808dd8bd0145a47ea3becbb64b29419c1460"
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
@@ -47,10 +65,10 @@ jobs:
           terraform -chdir=infra/environments/staging init -input=false -lockfile=readonly \
             -backend-config="bucket=$STATE_BUCKET" -backend-config="region=$AWS_REGION"
       - name: Generate a review summary
+        id: review
         shell: bash
         run: |
-          plan_dir=$(mktemp -d)
-          trap 'rm -rf "$plan_dir"' EXIT
+          plan_dir=$(mktemp -d "$RUNNER_TEMP/staging-plan.XXXXXX")
           terraform -chdir=infra/environments/staging plan -input=false -no-color \
             -lock-timeout=60s -out="$plan_dir/staging.tfplan" > "$plan_dir/plan.txt"
           {
@@ -62,3 +80,81 @@ jobs:
                 "| `\(.address)` | \(.change.actions | join(", ")) |"'
             grep -E '^(Plan:|No changes\.)' "$plan_dir/plan.txt" || true
           } | tee -a "$GITHUB_STEP_SUMMARY"
+          if [[ -n "$APPROVED_REVIEW_RUN" ]]; then
+            terraform -chdir=infra/environments/staging show -json "$plan_dir/staging.tfplan" |
+              jq -e '
+                [.resource_changes[]? | select(.change.actions != ["no-op"])] as $changes |
+                ($changes | all(.change.actions == ["create"])) and
+                (($changes | map(.address) | sort) == [
+                  "aws_iam_role.control_plane",
+                  "aws_iam_role_policy_attachment.cluster_policy",
+                  "aws_subnet.private[\"usw2-az1\"]",
+                  "aws_subnet.private[\"usw2-az2\"]",
+                  "aws_vpc.staging",
+                  "module.eks.aws_eks_cluster.this"
+                ])
+              '
+            checksum=$(sha256sum "$plan_dir/staging.tfplan" | cut -d ' ' -f 1)
+            printf 'checksum=%s\nfile=%s\n' "$checksum" "$plan_dir/staging.tfplan" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Save the approved plan for this run
+        if: inputs.approved_review_run != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: approved-staging-plan
+          path: ${{ steps.review.outputs.file }}
+          if-no-files-found: error
+          retention-days: 1
+
+  apply:
+    if: github.ref == 'refs/heads/main' && github.actor_id == '335912' && github.run_attempt == '1' && inputs.approved_review_run == '43668003653'
+    needs: plan
+    environment: staging-apply
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TF_IN_AUTOMATION: "true"
+      STATE_BUCKET: ${{ vars.TERRAFORM_STATE_BUCKET }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: "1.17.1"
+          terraform_wrapper: false
+      - name: Download the saved plan from this run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: approved-staging-plan
+          path: ${{ runner.temp }}/approved-staging
+      - name: Verify the saved plan checksum
+        shell: bash
+        env:
+          APPROVED_CHECKSUM: ${{ needs.plan.outputs.checksum }}
+        run: |
+          [[ "$APPROVED_CHECKSUM" =~ ^[a-f0-9]{64}$ ]]
+          printf '%s  %s\n' "$APPROVED_CHECKSUM" "$RUNNER_TEMP/approved-staging/staging.tfplan" |
+            sha256sum --check
+      - name: Assume the staging apply role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.TERRAFORM_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: "922763798103"
+      - name: Initialize the locked staging backend
+        shell: bash
+        run: |
+          terraform -chdir=infra/environments/staging init -input=false -lockfile=readonly \
+            -backend-config="bucket=$STATE_BUCKET" -backend-config="region=$AWS_REGION"
+      - name: Apply the verified plan
+        shell: bash
+        run: |
+          terraform -chdir=infra/environments/staging apply -input=false \
+            -no-color -lock-timeout=60s "$RUNNER_TEMP/approved-staging/staging.tfplan"

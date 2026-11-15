@@ -6,6 +6,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 6.0"
     }
+    github = {
+      source  = "integrations/github"
+      version = "~> 6.0"
+    }
   }
 }
 
@@ -85,25 +89,33 @@ resource "aws_iam_role" "github" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      # Enable the apply trust after its GitHub environment and approval gate exist.
-      Effect    = each.key == "plan" || var.enable_apply_trust ? "Allow" : "Deny"
+      Effect    = each.key == "plan" || var.apply_trust_until != null ? "Allow" : "Deny"
       Principal = { Federated = aws_iam_openid_connect_provider.github.arn }
       Action    = "sts:AssumeRoleWithWebIdentity"
-      Condition = {
-        StringEquals = {
-          "${local.oidc_host}:aud" = "sts.amazonaws.com"
-          "${local.oidc_host}:sub" = "repo:${local.repository}:environment:staging-${each.key}"
-        }
-      }
+      Condition = merge(
+        {
+          StringEquals = {
+            "${local.oidc_host}:aud" = "sts.amazonaws.com"
+            "${local.oidc_host}:sub" = "repo:${local.repository}:environment:staging-${each.key}"
+          }
+        },
+        each.key == "apply" && var.apply_trust_until != null ? {
+          DateLessThan = { "aws:CurrentTime" = var.apply_trust_until }
+        } : {},
+      )
     }]
   })
 }
 
-variable "enable_apply_trust" {
-  description = "Enable the staging apply role after its independent approval gate exists."
-  type        = bool
-  default     = false
-  nullable    = false
+variable "apply_trust_until" {
+  description = "UTC expiry of a reviewed apply window. Omit to disable apply role assumption."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.apply_trust_until == null ? true : can(formatdate("YYYY", var.apply_trust_until))
+    error_message = "Use an RFC 3339 timestamp."
+  }
 }
 
 resource "aws_iam_role_policy" "state" {
@@ -147,8 +159,12 @@ resource "aws_iam_role_policy" "read_staging" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = ["ec2:DescribeAvailabilityZones", "ec2:DescribeSubnets", "ec2:DescribeVpcs", "ec2:DescribeVpcAttribute"]
+        Effect = "Allow"
+        Action = [
+          "ec2:DescribeAvailabilityZones", "ec2:DescribeSubnets", "ec2:DescribeVpcs",
+          "ec2:DescribeVpcAttribute", "ec2:DescribeNetworkAcls", "ec2:DescribeRouteTables",
+          "ec2:DescribeSecurityGroups",
+        ]
         Resource = "*"
         Condition = {
           StringEquals = { "aws:RequestedRegion" = local.region }
