@@ -111,6 +111,15 @@ resource "aws_iam_role_policy" "write_workers" {
         }
       },
       {
+        # EKS checks for the service-linked roles before creating the node group.
+        Effect = "Allow"
+        Action = "iam:GetRole"
+        Resource = [
+          "${local.iam_prefix}:role/aws-service-role/eks-nodegroup.amazonaws.com/AWSServiceRoleForAmazonEKSNodegroup",
+          "${local.iam_prefix}:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling",
+        ]
+      },
+      {
         Effect   = "Allow"
         Action   = "iam:CreateServiceLinkedRole"
         Resource = ["${local.iam_prefix}:role/aws-service-role/eks-nodegroup.amazonaws.com/*", "${local.iam_prefix}:role/aws-service-role/autoscaling.amazonaws.com/*"]
