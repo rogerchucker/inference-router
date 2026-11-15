@@ -17,7 +17,8 @@ provider "aws" {
 locals {
   account_id = "922763798103"
   region     = "us-west-2"
-  repository = "rogerchucker/inference-router"
+  # This repository uses GitHub's immutable OIDC subjects.
+  repository = "rogerchucker@335912/inference-router@1457504171"
   oidc_host  = "token.actions.githubusercontent.com"
   state_key  = "inference-router/staging/terraform.tfstate"
 }
