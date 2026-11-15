@@ -38,6 +38,10 @@ jobs:
         run: |
           terraform -chdir=infra/bootstrap/staging init -backend=false -input=false -lockfile=readonly
           terraform -chdir=infra/bootstrap/staging validate
+      - name: Initialize and validate the staging GitOps root
+        run: |
+          terraform -chdir=infra/environments/staging-gitops init -backend=false -input=false -lockfile=readonly
+          terraform -chdir=infra/environments/staging-gitops validate
       - name: Run module tests with a mocked AWS provider
         shell: bash
         run: |

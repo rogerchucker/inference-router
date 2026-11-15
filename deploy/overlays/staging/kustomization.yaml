@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: inference-router-staging
+resources:
+  - ../../base
+configMapGenerator:
+  - name: inference-router-config
+    literals:
+      - ROUTER_MODE=eks
+      - ROUTER_TIMEOUT_SECONDS=60
+      - PROVIDER_TIMEOUT_SECONDS=25
+      - CLASSIFIER_TIMEOUT_SECONDS=2
+      - PYTHONDONTWRITEBYTECODE=1
+# The first promotion adds the tested ECR digest and enables replicas.
+replicas:
+  - name: inference-router
+    count: 0

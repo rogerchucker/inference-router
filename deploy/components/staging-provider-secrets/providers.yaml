@@ -1,0 +1,35 @@
+apiVersion: external-secrets.io/v1
+kind: SecretStore
+metadata:
+  name: staging-provider-secrets
+spec:
+  provider:
+    aws:
+      service: SecretsManager
+      region: us-west-2
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: inference-router-providers
+spec:
+  refreshInterval: 15m
+  secretStoreRef:
+    name: staging-provider-secrets
+    kind: SecretStore
+  target:
+    name: inference-router-providers
+    creationPolicy: Owner
+  data:
+    - secretKey: OPENAI_API_KEY
+      remoteRef:
+        key: inference-router/staging/providers
+        property: OPENAI_API_KEY
+    - secretKey: ANTHROPIC_API_KEY
+      remoteRef:
+        key: inference-router/staging/providers
+        property: ANTHROPIC_API_KEY
+    - secretKey: OPENROUTER_API_KEY
+      remoteRef:
+        key: inference-router/staging/providers
+        property: OPENROUTER_API_KEY
