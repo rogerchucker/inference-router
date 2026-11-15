@@ -1,0 +1,27 @@
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: inference-router-providers
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  refreshInterval: 15m
+  secretStoreRef:
+    name: dev-provider-secrets
+    kind: SecretStore
+  target:
+    name: inference-router-providers
+    creationPolicy: Owner
+  data:
+    - secretKey: OPENAI_API_KEY
+      remoteRef:
+        key: inference-router/dev/providers
+        property: OPENAI_API_KEY
+    - secretKey: ANTHROPIC_API_KEY
+      remoteRef:
+        key: inference-router/dev/providers
+        property: ANTHROPIC_API_KEY
+    - secretKey: OPENROUTER_API_KEY
+      remoteRef:
+        key: inference-router/dev/providers
+        property: OPENROUTER_API_KEY

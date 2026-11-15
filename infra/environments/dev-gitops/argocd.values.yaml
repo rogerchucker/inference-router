@@ -1,0 +1,23 @@
+configs:
+  cm:
+    admin.enabled: "false"
+
+dex:
+  enabled: false
+applicationSet:
+  enabled: false
+notifications:
+  enabled: false
+server:
+  service:
+    type: ClusterIP
+controller:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+repoServer:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi

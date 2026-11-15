@@ -1,0 +1,24 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: inference-router-dev
+resources:
+  - ../../base
+  - secret-store.yaml
+  - providers.yaml
+patches:
+  - path: router-provider-env.yaml
+configMapGenerator:
+  - name: inference-router-config
+    literals:
+      - ROUTER_MODE=eks
+      - ROUTER_TIMEOUT_SECONDS=60
+      - PROVIDER_TIMEOUT_SECONDS=25
+      - CLASSIFIER_TIMEOUT_SECONDS=2
+      - PYTHONDONTWRITEBYTECODE=1
+images:
+  - name: inference-router
+    newName: 922763798103.dkr.ecr.us-west-2.amazonaws.com/inference-router
+    digest: sha256:1e9b6dfd0e8f56d76a09b79ac8768581fd838e710505421229155ccba0b8b9f7
+replicas:
+  - name: inference-router
+    count: 2

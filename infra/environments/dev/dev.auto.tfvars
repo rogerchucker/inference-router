@@ -1,0 +1,6 @@
+aws_account_id              = "922763798103"
+aws_region                  = "us-west-2"
+kubernetes_version          = "1.37"
+cluster_admin_principal_arn = "arn:aws:iam::922763798103:user/raj"
+session_host_ami_id         = "ami-0c09db4d8b86a32d2"
+vpc_cidr                    = "10.43.0.0/16"

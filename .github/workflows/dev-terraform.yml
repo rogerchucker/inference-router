@@ -1,0 +1,174 @@
+name: Dev Terraform
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "Create a saved plan or apply a reviewed plan."
+        type: choice
+        options: [plan, apply]
+        default: plan
+        required: true
+      plan_run_id:
+        description: "Dev Terraform plan run ID for apply."
+        type: string
+        required: false
+      plan_sha256:
+        description: "SHA-256 of the reviewed binary plan for apply."
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-dev
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_ROOT: infra/environments/dev
+
+jobs:
+  plan:
+    if: github.repository_id == '1457504171' && github.event.repository.private && github.ref == 'refs/heads/main' && inputs.operation == 'plan'
+    environment: dev-plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: "1.17.1"
+          terraform_wrapper: false
+      - name: Assume the Dev plan role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.TERRAFORM_PLAN_ROLE_ARN }}
+          aws-region: us-west-2
+          allowed-account-ids: "922763798103"
+      - name: Save the plan and summarize its changes
+        shell: bash
+        run: |
+          umask 077
+          terraform -chdir="$TF_ROOT" init -input=false -lockfile=readonly
+          plan="$RUNNER_TEMP/dev.tfplan"
+          terraform -chdir="$TF_ROOT" plan -input=false -no-color -lock-timeout=60s \
+            -out="$plan" > "$RUNNER_TEMP/dev-plan.log"
+          {
+            printf '### Dev Terraform plan\n\nCommit: `%s`\n\n' "$GITHUB_SHA"
+            printf 'Plan run: `%s`, attempt `%s`\n\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            printf 'Binary SHA-256: `%s`\n\n' "$(sha256sum "$plan" | cut -d ' ' -f 1)"
+            printf '| Resource | Actions |\n| --- | --- |\n'
+            terraform -chdir="$TF_ROOT" show -json "$plan" |
+              jq -r '.resource_changes[]? | select(.change.actions != ["no-op"]) |
+                "| `\(.address)` | \(.change.actions | join(", ")) |"'
+            printf '\n'
+            grep -E '^(Plan:|No changes\.)' "$RUNNER_TEMP/dev-plan.log" || true
+            printf '\nDownload the private run artifact and use `terraform show` to review the exact binary.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the binary plan
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dev-tfplan-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/dev.tfplan
+          if-no-files-found: error
+          retention-days: 1
+
+  apply:
+    if: >-
+      github.repository_id == '1457504171' && github.event.repository.private &&
+      github.ref == 'refs/heads/main' && github.actor_id == '335912' &&
+      github.run_attempt == '1' && inputs.operation == 'apply'
+    environment: dev-apply
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    env:
+      PLAN_RUN_ID: ${{ inputs.plan_run_id }}
+      PLAN_SHA256: ${{ inputs.plan_sha256 }}
+    steps:
+      - name: Verify plan approval and run provenance
+        id: verify
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVED_RUN_ID: ${{ vars.TERRAFORM_APPROVED_PLAN_RUN_ID }}
+          APPROVED_SHA256: ${{ vars.TERRAFORM_APPROVED_PLAN_SHA256 }}
+        run: |
+          if ! [[ "$PLAN_RUN_ID" =~ ^[1-9][0-9]*$ && "$PLAN_SHA256" =~ ^[a-f0-9]{64}$ &&
+                  "$PLAN_RUN_ID" == "$APPROVED_RUN_ID" && "$PLAN_SHA256" == "$APPROVED_SHA256" ]]; then
+            echo "::error::Enter the run ID and binary SHA-256 recorded in the Dev apply environment."
+            exit 1
+          fi
+          workflow_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/dev-terraform.yml" --jq '.id')
+          run=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PLAN_RUN_ID")
+          jq -e --argjson workflow_id "$workflow_id" --argjson repo_id "$GITHUB_REPOSITORY_ID" \
+            --arg sha "$GITHUB_SHA" '
+              .workflow_id == $workflow_id and
+              .path == ".github/workflows/dev-terraform.yml" and
+              .event == "workflow_dispatch" and
+              .status == "completed" and .conclusion == "success" and
+              .head_branch == "main" and .head_sha == $sha and
+              .repository.id == $repo_id and .repository.private == true and
+              .head_repository.id == $repo_id and
+              (.run_attempt | tostring | test("^[1-9][0-9]*$"))
+            ' <<< "$run" >/dev/null
+          attempt=$(jq -r '.run_attempt' <<< "$run")
+          jobs=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PLAN_RUN_ID/attempts/$attempt/jobs")
+          jq -e 'any(.jobs[]; .name == "plan" and .status == "completed" and .conclusion == "success")' \
+            <<< "$jobs" >/dev/null
+          printf 'artifact=dev-tfplan-attempt-%s\n' "$attempt" >> "$GITHUB_OUTPUT"
+      - name: Download the plan from the reviewed run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ steps.verify.outputs.artifact }}
+          path: ${{ runner.temp }}/approved-dev
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.plan_run_id }}
+      - name: Verify the binary and current main revision
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          plan="$RUNNER_TEMP/approved-dev/dev.tfplan"
+          test -f "$plan"
+          test ! -L "$plan"
+          printf '%s  %s\n' "$PLAN_SHA256" "$plan" | sha256sum --check
+          if [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" != "$GITHUB_SHA" ]]; then
+            echo "::error::Main changed. Review a fresh Dev plan before applying."
+            exit 1
+          fi
+      - name: Check out the reviewed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: "1.17.1"
+          terraform_wrapper: false
+      - name: Assume the Dev apply role while the approval is valid
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.TERRAFORM_APPLY_ROLE_ARN }}
+          role-session-name: dev-terraform-${{ github.run_id }}
+          aws-region: us-west-2
+          allowed-account-ids: "922763798103"
+      - name: Apply the verified binary
+        shell: bash
+        run: |
+          terraform -chdir="$TF_ROOT" init -input=false -lockfile=readonly
+          terraform -chdir="$TF_ROOT" apply -input=false -no-color -lock-timeout=60s \
+            "$RUNNER_TEMP/approved-dev/dev.tfplan"
