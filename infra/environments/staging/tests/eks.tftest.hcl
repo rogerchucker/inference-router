@@ -1,8 +1,6 @@
 mock_provider "aws" {}
 
 variables {
-  aws_region         = "us-west-2"
-  aws_account_id     = "123456789012"
   kubernetes_version = "1.35"
   cluster_role_arn   = "arn:aws:iam::123456789012:role/example-eks-control-plane"
   private_subnet_ids = ["subnet-00000000000000001", "subnet-00000000000000002"]
@@ -14,6 +12,14 @@ run "staging_root_wires_the_cluster" {
   assert {
     condition     = output.cluster_name == "inference-router-staging"
     error_message = "The staging root must name the cluster inference-router-staging."
+  }
+
+  assert {
+    condition = (
+      length(aws_subnet.private) == 2 &&
+      alltrue([for subnet in aws_subnet.private : !subnet.map_public_ip_on_launch])
+    )
+    error_message = "Staging must use two subnets without public IP assignment."
   }
 }
 

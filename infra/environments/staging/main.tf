@@ -3,8 +3,10 @@ module "eks" {
 
   cluster_name       = "inference-router-staging"
   kubernetes_version = var.kubernetes_version
-  cluster_role_arn   = var.cluster_role_arn
-  private_subnet_ids = var.private_subnet_ids
+  cluster_role_arn   = aws_iam_role.control_plane.arn
+  private_subnet_ids = toset([for subnet in aws_subnet.private : subnet.id])
+
+  depends_on = [aws_iam_role_policy_attachment.cluster_policy]
 
   tags = {
     Project     = "inference-router"

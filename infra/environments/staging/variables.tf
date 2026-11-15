@@ -20,15 +20,3 @@ variable "kubernetes_version" {
   type        = string
   nullable    = false
 }
-
-variable "cluster_role_arn" {
-  description = "ARN of the existing IAM role that EKS assumes for its control plane."
-  type        = string
-  nullable    = false
-}
-
-variable "private_subnet_ids" {
-  description = "Existing private subnets in one VPC and at least two Availability Zones."
-  type        = set(string)
-  nullable    = false
-}
