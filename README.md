@@ -82,6 +82,8 @@ The `PYTHON_VERSION` and `UV_VERSION` defaults in the [Dockerfile](Dockerfile) s
 
 When a delivery script changes how it opens or closes an SDK client, test with the pinned SDK client and stub the network calls. A mock can accept a `with` block that the real client rejects. The [EKS verifier regression test](.github/scripts/test_verify_eks.py) exercises client cleanup and Session Manager termination without AWS credentials.
 
+The verifier roles [scope StartSession](infra/environments/promotion-access/access.tf) to one host and one port-forwarding document per environment. Use the hosted verification run to check the role against the real API. IAM simulation alone cannot tell which condition keys Systems Manager supplies during the instance check.
+
 ## Practice a Kubernetes rollback
 
 Run this drill with Docker, kind, and kubectl. The commands target a local cluster named `kind-router-lab`. The CircleCI workflow runs tests, builds a commit-tagged image, smoke-tests it, and saves the tested image as an artifact. The local lab builds its own image.

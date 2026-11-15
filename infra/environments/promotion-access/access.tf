@@ -39,7 +39,9 @@ resource "aws_iam_role_policy" "verify" {
         Action   = "ssm:StartSession"
         Resource = "arn:aws:ec2:${local.region}:${local.account}:instance/${data.terraform_remote_state.cluster[each.key].outputs.session_host_instance_id}"
         Condition = {
-          Bool = { "ssm:SessionDocumentAccessCheck" = true }
+          # StartSession can omit the key during the instance check. An explicit
+          # false still denies the request, and the document has its own exact allow.
+          BoolIfExists = { "ssm:SessionDocumentAccessCheck" = true }
         }
       },
       {
