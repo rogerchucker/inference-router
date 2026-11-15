@@ -3,8 +3,8 @@ name: Staging Terraform
 on:
   workflow_dispatch:
     inputs:
-      approved_review_run:
-        description: "Approved initial staging plan run ID. Leave blank for plan only."
+      approved_plan_sha256:
+        description: "SHA-256 of the reviewed staging workers plan. Leave blank for plan only."
         type: string
         required: false
 
@@ -30,22 +30,22 @@ jobs:
       TF_IN_AUTOMATION: "true"
       STATE_BUCKET: ${{ vars.TERRAFORM_STATE_BUCKET }}
       AWS_REGION: ${{ vars.AWS_REGION }}
-      APPROVED_REVIEW_RUN: ${{ inputs.approved_review_run }}
+      APPROVED_PLAN_SHA256: ${{ inputs.approved_plan_sha256 }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Check initial apply approval
-        if: inputs.approved_review_run != ''
+      - name: Check staging workers approval
+        if: inputs.approved_plan_sha256 != ''
         shell: bash
         run: |
-          # This gate authorizes only the six creates reviewed in run 43668003653.
+          # Bind this approval to the reviewed 32-create plan and its Terraform source.
           test "$GITHUB_ACTOR_ID" = "335912"
           test "$GITHUB_RUN_ATTEMPT" = "1"
-          test "$APPROVED_REVIEW_RUN" = "43668003653"
-          test "$(git rev-parse HEAD:infra/environments/staging)" = "88eda6d6356a6418001b2d4b0807b3d4c1b9d21d"
-          test "$(git rev-parse HEAD:infra/modules/eks-control-plane)" = "72fe808dd8bd0145a47ea3becbb64b29419c1460"
+          test "$APPROVED_PLAN_SHA256" = "17dd5270315562d3550f03e4991dd2493d5d711bb10a886fdfbeffa17d7a1528"
+          test "$(git rev-parse HEAD:infra/environments/staging)" = "b8e274de04769b697485afecbc4b185a2911167e"
+          test "$(git rev-parse HEAD:infra/modules/eks-control-plane)" = "13f04d1b44acafcdd8ba77f3abbf512a7e6785f1"
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
@@ -80,25 +80,23 @@ jobs:
                 "| `\(.address)` | \(.change.actions | join(", ")) |"'
             grep -E '^(Plan:|No changes\.)' "$plan_dir/plan.txt" || true
           } | tee -a "$GITHUB_STEP_SUMMARY"
-          if [[ -n "$APPROVED_REVIEW_RUN" ]]; then
+          if [[ -n "$APPROVED_PLAN_SHA256" ]]; then
             terraform -chdir=infra/environments/staging show -json "$plan_dir/staging.tfplan" |
-              jq -e '
-                [.resource_changes[]? | select(.change.actions != ["no-op"])] as $changes |
-                ($changes | all(.change.actions == ["create"])) and
-                (($changes | map(.address) | sort) == [
-                  "aws_iam_role.control_plane",
-                  "aws_iam_role_policy_attachment.cluster_policy",
-                  "aws_subnet.private[\"usw2-az1\"]",
-                  "aws_subnet.private[\"usw2-az2\"]",
-                  "aws_vpc.staging",
-                  "module.eks.aws_eks_cluster.this"
-                ])
-              '
+              jq -cS '[.resource_changes[] | {address,change:{actions:.change.actions,before:.change.before,after:.change.after,after_unknown:.change.after_unknown}}]|sort_by(.address)' \
+                > "$plan_dir/changes.json"
+            jq -e 'length > 0 and all(.[]; .change.actions == ["create"] or .change.actions == ["no-op"]) and ([.[] | select(.change.actions == ["create"])] | length) == 32' \
+              "$plan_dir/changes.json"
+            changes_checksum=$(sha256sum "$plan_dir/changes.json" | cut -d ' ' -f 1)
+            if [[ "$changes_checksum" != "72c0faea121b674a5374a64ec18e44aaa11ee8180ac311a83008993b217c0a87" ]]; then
+              echo "The fresh plan differs from the reviewed plan. Apply is blocked." >&2
+              exit 1
+            fi
+            echo "All 32 creates and their values match the reviewed plan."
             checksum=$(sha256sum "$plan_dir/staging.tfplan" | cut -d ' ' -f 1)
             printf 'checksum=%s\nfile=%s\n' "$checksum" "$plan_dir/staging.tfplan" >> "$GITHUB_OUTPUT"
           fi
       - name: Save the approved plan for this run
-        if: inputs.approved_review_run != ''
+        if: inputs.approved_plan_sha256 != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: approved-staging-plan
@@ -107,7 +105,7 @@ jobs:
           retention-days: 1
 
   apply:
-    if: github.ref == 'refs/heads/main' && github.actor_id == '335912' && github.run_attempt == '1' && inputs.approved_review_run == '43668003653'
+    if: github.ref == 'refs/heads/main' && github.actor_id == '335912' && github.run_attempt == '1' && inputs.approved_plan_sha256 != '' && needs.plan.outputs.checksum != ''
     needs: plan
     environment: staging-apply
     runs-on: ubuntu-24.04
