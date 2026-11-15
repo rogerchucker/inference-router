@@ -122,3 +122,7 @@ async def infer(payload: InferenceRequest, request: Request) -> InferenceRespons
     except InferenceFailed as error:
         logger.info("inference_failed request_id=%s code=%s", request_id, error.code)
         raise HTTPException(error.status, detail=error.code, headers={"X-Request-ID": request_id}) from error
+
+@app.get("/version")
+async def version() -> dict[str, str]:
+    return {"source_sha":os.getenv("ROUTER_BUILD_SHA", "local")}

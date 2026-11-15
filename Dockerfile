@@ -10,5 +10,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --locked --no-dev --no-cache
 COPY app.py providers.py router.py ./
 USER 10001:10001
+ARG SOURCE_SHA=local
+ENV ROUTER_BUILD_SHA=${SOURCE_SHA}
 EXPOSE 8080
 CMD ["/app/.venv/bin/python", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]
