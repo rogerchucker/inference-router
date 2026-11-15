@@ -26,7 +26,8 @@ resource "aws_iam_role_policy" "read_workers" {
       {
         Effect = "Allow"
         Action = [
-          "ec2:DescribeAddresses", "ec2:DescribeInternetGateways", "ec2:DescribeNatGateways",
+          # The AWS provider reads the EIP domain-name attribute immediately after allocation.
+          "ec2:DescribeAddresses", "ec2:DescribeAddressesAttribute", "ec2:DescribeInternetGateways", "ec2:DescribeNatGateways",
           "ec2:DescribeSecurityGroupRules", "ec2:DescribeLaunchTemplates", "ec2:DescribeLaunchTemplateVersions",
           "ec2:DescribeInstances", "ec2:DescribeInstanceAttribute", "ec2:DescribeVolumes",
           "ec2:DescribeInstanceCreditSpecifications", "ec2:DescribeIamInstanceProfileAssociations",
