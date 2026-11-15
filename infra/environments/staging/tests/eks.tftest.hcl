@@ -21,6 +21,25 @@ run "staging_root_wires_the_cluster" {
     )
     error_message = "Staging must use two subnets without public IP assignment."
   }
+
+  assert {
+    condition = (
+      aws_eks_node_group.workers.scaling_config[0].desired_size == 2 &&
+      aws_eks_node_group.workers.ami_type == "AL2023_x86_64_STANDARD" &&
+      aws_launch_template.workers.metadata_options[0].http_tokens == "required"
+    )
+    error_message = "Staging must start two x86 AL2023 workers with IMDSv2 required."
+  }
+
+  assert {
+    condition = (
+      length(aws_route_table_association.private) == 2 &&
+      aws_route.private_internet.destination_cidr_block == "0.0.0.0/0" &&
+      !aws_instance.session_host.associate_public_ip_address &&
+      aws_vpc_security_group_ingress_rule.cluster_api_from_session_host.from_port == 443
+    )
+    error_message = "Both worker subnets need an egress route, and admin access must use the private session host over HTTPS."
+  }
 }
 
 run "module_uses_private_endpoint_and_explicit_access" {

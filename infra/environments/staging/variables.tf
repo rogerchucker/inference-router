@@ -20,3 +20,20 @@ variable "kubernetes_version" {
   type        = string
   nullable    = false
 }
+
+variable "cluster_admin_principal_arn" {
+  description = "Existing IAM principal that can assume the short-lived staging cluster admin role."
+  type        = string
+  nullable    = false
+}
+
+variable "session_host_ami_id" {
+  description = "Pinned Amazon Linux 2023 arm64 AMI ID in the staging region."
+  type        = string
+  nullable    = false
+
+  validation {
+    condition     = can(regex("^ami-[0-9a-f]{17}$", var.session_host_ami_id))
+    error_message = "Supply a regional AMI ID with 17 hexadecimal digits."
+  }
+}
