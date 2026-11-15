@@ -3,6 +3,7 @@ kind: Kustomization
 namespace: inference-router-staging
 resources:
   - ../../base
+  - secret-store.yaml
 configMapGenerator:
   - name: inference-router-config
     literals:
