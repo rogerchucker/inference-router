@@ -11,7 +11,10 @@ configMapGenerator:
       - PROVIDER_TIMEOUT_SECONDS=25
       - CLASSIFIER_TIMEOUT_SECONDS=2
       - PYTHONDONTWRITEBYTECODE=1
-# The first promotion adds the tested ECR digest and enables replicas.
+images:
+  - name: inference-router
+    newName: 922763798103.dkr.ecr.us-west-2.amazonaws.com/inference-router
+    digest: sha256:1e9b6dfd0e8f56d76a09b79ac8768581fd838e710505421229155ccba0b8b9f7
 replicas:
   - name: inference-router
-    count: 0
+    count: 2
