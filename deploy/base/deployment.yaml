@@ -33,9 +33,6 @@ spec:
           envFrom:
             - configMapRef:
                 name: inference-router-config
-            - secretRef:
-                name: inference-router-providers
-                optional: true
           ports:
             - name: http
               containerPort: 8080

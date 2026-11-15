@@ -4,6 +4,8 @@ namespace: inference-router-staging
 resources:
   - ../../base
   - secret-store.yaml
+components:
+  - ../../components/staging-provider-secrets
 configMapGenerator:
   - name: inference-router-config
     literals:
