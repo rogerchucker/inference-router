@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       approved_plan_sha256:
-        description: "SHA-256 of the reviewed staging recovery plan. Leave blank for plan only."
+        description: "SHA-256 of the reviewed staging worker recovery plan. Leave blank for plan only."
         type: string
         required: false
 
@@ -40,10 +40,10 @@ jobs:
         if: inputs.approved_plan_sha256 != ''
         shell: bash
         run: |
-          # Bind this approval to the reviewed five-create recovery plan and its Terraform source.
+          # Bind this approval to the two remaining creates from the approved recovery and its Terraform source.
           test "$GITHUB_ACTOR_ID" = "335912"
           test "$GITHUB_RUN_ATTEMPT" = "1"
-          test "$APPROVED_PLAN_SHA256" = "a3e2a39d98b2c0a2523c3e69bf535fd40dc738a21eb5f4ee5d5437918c80aac4"
+          test "$APPROVED_PLAN_SHA256" = "e100050fc7cd2f3cac4e1a3ad719a638dbf5e458cdc788f92ef97afd0ae9582f"
           test "$(git rev-parse HEAD:infra/environments/staging)" = "b8e274de04769b697485afecbc4b185a2911167e"
           test "$(git rev-parse HEAD:infra/modules/eks-control-plane)" = "13f04d1b44acafcdd8ba77f3abbf512a7e6785f1"
       - name: Set up Terraform
@@ -84,14 +84,14 @@ jobs:
             terraform -chdir=infra/environments/staging show -json "$plan_dir/staging.tfplan" |
               jq -cS '[.resource_changes[] | {address,change:{actions:.change.actions,before:.change.before,after:.change.after,after_unknown:.change.after_unknown}}]|sort_by(.address)' \
                 > "$plan_dir/changes.json"
-            jq -e 'length > 0 and all(.[]; .change.actions == ["create"] or .change.actions == ["no-op"]) and ([.[] | select(.change.actions == ["create"])] | length) == 5' \
+            jq -e 'length > 0 and all(.[]; .change.actions == ["create"] or .change.actions == ["no-op"]) and ([.[] | select(.change.actions == ["create"])] | length) == 2' \
               "$plan_dir/changes.json"
             changes_checksum=$(sha256sum "$plan_dir/changes.json" | cut -d ' ' -f 1)
-            if [[ "$changes_checksum" != "9707ac3d93c89c6f293c1ab160754bfe9ffdff6d1f73713370a7bcc38d1f5231" ]]; then
+            if [[ "$changes_checksum" != "ba62740c3cd7170b17c6e2a391dc36392dfd071562f5e91ddddc0be129554ecf" ]]; then
               echo "The fresh plan differs from the reviewed plan. Apply is blocked." >&2
               exit 1
             fi
-            echo "All five creates and their values match the reviewed plan."
+            echo "Both remaining creates and their values match the reviewed plan."
             checksum=$(sha256sum "$plan_dir/staging.tfplan" | cut -d ' ' -f 1)
             printf 'checksum=%s\nfile=%s\n' "$checksum" "$plan_dir/staging.tfplan" >> "$GITHUB_OUTPUT"
           fi
