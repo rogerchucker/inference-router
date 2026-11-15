@@ -18,7 +18,7 @@ configMapGenerator:
 images:
   - name: inference-router
     newName: 922763798103.dkr.ecr.us-west-2.amazonaws.com/inference-router
-    digest: sha256:1e9b6dfd0e8f56d76a09b79ac8768581fd838e710505421229155ccba0b8b9f7
+    digest: sha256:4ffbab7a42c1b655664c03092af75e2ef5b985a8c4f91e4b53a9535d51eca2c0
 replicas:
   - name: inference-router
     count: 2
