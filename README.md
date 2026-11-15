@@ -80,6 +80,8 @@ The [GitHub Actions workflow](.github/workflows/app-ci.yml) runs lint, tests, an
 
 The `PYTHON_VERSION` and `UV_VERSION` defaults in the [Dockerfile](Dockerfile) set the toolchain for both App CI and the container build.
 
+When a delivery script changes how it opens or closes an SDK client, test with the pinned SDK client and stub the network calls. A mock can accept a `with` block that the real client rejects. The [EKS verifier regression test](.github/scripts/test_verify_eks.py) exercises client cleanup and Session Manager termination without AWS credentials.
+
 ## Practice a Kubernetes rollback
 
 Run this drill with Docker, kind, and kubectl. The commands target a local cluster named `kind-router-lab`. The CircleCI workflow runs tests, builds a commit-tagged image, smoke-tests it, and saves the tested image as an artifact. The local lab builds its own image.

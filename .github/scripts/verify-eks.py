@@ -16,7 +16,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -63,7 +63,7 @@ def background(command, **kwargs):
 @contextmanager
 def private_kubeconfig(directory, region, cluster_name, session_host):
     session = boto3.Session(region_name=region)
-    with session.client("eks", config=SDK_CONFIG) as eks:
+    with closing(session.client("eks", config=SDK_CONFIG)) as eks:
         cluster = eks.describe_cluster(name=cluster_name)["cluster"]
     vpc = cluster["resourcesVpcConfig"]
     if (
@@ -105,7 +105,7 @@ def private_kubeconfig(directory, region, cluster_name, session_host):
         "DocumentName": "AWS-StartPortForwardingSessionToRemoteHost",
         "Parameters": {"host": [endpoint.hostname], "portNumber": ["443"], "localPortNumber": [str(port)]},
     }
-    with session.client("ssm", config=SDK_CONFIG) as ssm:
+    with closing(session.client("ssm", config=SDK_CONFIG)) as ssm:
         response = ssm.start_session(**request)
         try:
             payload = {key: response[key] for key in ("SessionId", "StreamUrl", "TokenValue")}

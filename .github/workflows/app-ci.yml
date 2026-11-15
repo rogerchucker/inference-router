@@ -101,6 +101,8 @@ jobs:
         run: uv run --locked python -m unittest discover -s tests -v
       - name: Test promotion logic
         run: uv run --with pyyaml==6.0.3 --locked python -m unittest discover -s .github/scripts -p 'test_delivery.py' -v
+      - name: Test EKS verification client lifecycle
+        run: uv run --with boto3==1.44.3 --with botocore==1.44.3 --locked python -m unittest discover -s .github/scripts -p 'test_verify_eks.py' -v
       - name: Build the router image for EKS
         run: docker build --platform linux/amd64 --provenance=false --sbom=false --tag inference-router:ci .
       - name: Smoke-test demo and EKS modes
