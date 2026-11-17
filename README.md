@@ -84,6 +84,19 @@ When a delivery script changes how it opens or closes an SDK client, test with t
 
 The verifier roles [scope StartSession](infra/environments/promotion-access/access.tf) to one host and one port-forwarding document per environment. Use the hosted verification run to check the role against the real API. IAM simulation alone cannot tell which condition keys Systems Manager supplies during the instance check.
 
+## Forward the Dev or Stage router
+
+Use `uv`, the AWS CLI, the Session Manager plugin, and `kubectl` with your AWS login. Run one command per environment from the repository:
+
+```bash
+uv run --script .github/scripts/forward-router.py dev
+uv run --script .github/scripts/forward-router.py staging
+```
+
+Dev listens on `127.0.0.1:8081` and Stage listens on `127.0.0.1:8082`. Use `--port` to choose another local port. The script finds the session host in the selected cluster's VPC and waits for the Kubernetes API before it forwards the router Service.
+
+Keep the command running and test the printed URL from another terminal. Press `Ctrl+C` to close both forwards. The script uses a temporary kubeconfig and preserves TLS verification.
+
 ## Practice a Kubernetes rollback
 
 Run this drill with Docker, kind, and kubectl. The commands target a local cluster named `kind-router-lab`. The CircleCI workflow runs tests, builds a commit-tagged image, smoke-tests it, and saves the tested image as an artifact. The local lab builds its own image.

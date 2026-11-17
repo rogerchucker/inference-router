@@ -1,6 +1,5 @@
 """Exercise the verifier's AWS SDK client lifecycle without contacting AWS."""
 
-import importlib.util
 import json
 import pathlib
 import tempfile
@@ -10,10 +9,7 @@ from unittest import TestCase
 from unittest.mock import patch
 
 import boto3
-
-spec = importlib.util.spec_from_file_location("verify_eks", pathlib.Path(__file__).with_name("verify-eks.py"))
-verify_eks = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(verify_eks)
+import eks_tunnel
 
 
 @contextmanager
@@ -46,15 +42,15 @@ class PrivateKubeconfigTests(TestCase):
 
         with (
             tempfile.TemporaryDirectory() as directory,
-            patch.object(verify_eks.boto3, "Session", return_value=stub_session),
+            patch.object(eks_tunnel.boto3, "Session", return_value=stub_session),
             patch.object(eks, "describe_cluster", return_value=description),
             patch.object(eks, "close") as close_eks,
             patch.object(ssm, "start_session", return_value=session_response),
             patch.object(ssm, "terminate_session") as terminate,
             patch.object(ssm, "close") as close_ssm,
-            patch.object(verify_eks, "background", no_tunnel),
+            patch.object(eks_tunnel, "background", no_tunnel),
         ):
-            with verify_eks.private_kubeconfig(pathlib.Path(directory), "us-west-2", cluster, "i-test") as (
+            with eks_tunnel.private_kubeconfig(pathlib.Path(directory), "us-west-2", cluster, "i-test") as (
                 kubectl,
                 _,
             ):
@@ -63,3 +59,17 @@ class PrivateKubeconfigTests(TestCase):
             terminate.assert_called_once_with(SessionId="test")
             close_eks.assert_called_once_with()
             close_ssm.assert_called_once_with()
+
+    def test_waits_for_the_kubernetes_api(self):
+        refused = SimpleNamespace(returncode=1, stderr="connection refused")
+        ready = SimpleNamespace(returncode=0, stderr="")
+        tunnel = SimpleNamespace(poll=lambda: None)
+
+        with (
+            patch.object(eks_tunnel.subprocess, "run", side_effect=[refused, ready]) as run,
+            patch.object(eks_tunnel.time, "sleep"),
+        ):
+            eks_tunnel.wait_for_api(["kubectl", "--kubeconfig", "test"], tunnel)
+
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args.args[0][-2:], ["get", "--raw=/readyz"])

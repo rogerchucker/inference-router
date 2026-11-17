@@ -11,30 +11,28 @@ import os
 import re
 import shutil
 import signal
-import socket
 import subprocess
 import sys
 import tempfile
 import time
-from contextlib import closing, contextmanager
 from pathlib import Path
-from urllib.parse import urlsplit
 
-import boto3
-from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
+from eks_tunnel import (
+    ACCOUNT,
+    LOOPBACK,
+    REGION,
+    ROUTER,
+    TunnelError,
+    private_kubeconfig,
+    router_service,
+)
 
-ACCOUNT = "922763798103"
-REGION = "us-west-2"
-ROUTER = "inference-router"
-LOOPBACK = "127.0.0.1"
 REPLICAS = 2
 COMMIT = re.compile(r"[0-9a-f]{40}")
 IMAGE = re.compile(
     rf"{ACCOUNT}\.dkr\.ecr\.{REGION}\.amazonaws\.com/{ROUTER}@sha256:[0-9a-f]{{64}}"
 )
-FORWARDING = re.compile(r"^Forwarding from 127\.0\.0\.1:([0-9]+) -> 8080$", re.MULTILINE)
-SDK_CONFIG = Config(connect_timeout=5, read_timeout=10, retries={"mode": "standard", "total_max_attempts": 3})
 
 
 class VerificationFailed(Exception):
@@ -43,86 +41,6 @@ class VerificationFailed(Exception):
 
 def run(command):
     return subprocess.run(command, check=False, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=25)
-
-
-@contextmanager
-def background(command, **kwargs):
-    with subprocess.Popen(command, stdin=subprocess.DEVNULL, stderr=subprocess.STDOUT, **kwargs) as process:
-        try:
-            yield process
-        finally:
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
-
-
-@contextmanager
-def private_kubeconfig(directory, region, cluster_name, session_host):
-    session = boto3.Session(region_name=region)
-    with closing(session.client("eks", config=SDK_CONFIG)) as eks:
-        cluster = eks.describe_cluster(name=cluster_name)["cluster"]
-    vpc = cluster["resourcesVpcConfig"]
-    if (
-        cluster["arn"] != f"arn:aws:eks:{region}:{ACCOUNT}:cluster/{cluster_name}"
-        or cluster["status"] != "ACTIVE"
-        or vpc["endpointPublicAccess"]
-        or not vpc["endpointPrivateAccess"]
-    ):
-        raise VerificationFailed("Expected the active private EKS cluster.")
-    endpoint = urlsplit(cluster["endpoint"])
-    if endpoint.scheme != "https" or not endpoint.hostname:
-        raise VerificationFailed("EKS returned an invalid HTTPS endpoint.")
-
-    with socket.socket() as address:
-        address.bind((LOOPBACK, 0))
-        port = address.getsockname()[1]
-    path = directory / "kubeconfig"
-    path.touch(mode=0o600)
-    path.write_text(json.dumps({
-        "apiVersion": "v1",
-        "kind": "Config",
-        "clusters": [{"name": cluster_name, "cluster": {
-            "server": f"https://{LOOPBACK}:{port}",
-            "tls-server-name": endpoint.hostname,
-            "certificate-authority-data": cluster["certificateAuthority"]["data"],
-        }}],
-        "users": [{"name": "verifier", "user": {"exec": {
-            "apiVersion": "client.authentication.k8s.io/v1beta1",
-            "command": "aws",
-            "args": ["eks", "get-token", "--cluster-name", cluster_name, "--region", region],
-            "interactiveMode": "Never",
-        }}}],
-        "contexts": [{"name": cluster_name, "context": {"cluster": cluster_name, "user": "verifier"}}],
-        "current-context": cluster_name,
-    }))
-
-    request = {
-        "Target": session_host,
-        "DocumentName": "AWS-StartPortForwardingSessionToRemoteHost",
-        "Parameters": {"host": [endpoint.hostname], "portNumber": ["443"], "localPortNumber": [str(port)]},
-    }
-    with closing(session.client("ssm", config=SDK_CONFIG)) as ssm:
-        response = ssm.start_session(**request)
-        try:
-            payload = {key: response[key] for key in ("SessionId", "StreamUrl", "TokenValue")}
-            tunnel = [
-                "session-manager-plugin", "AWS_SSM_START_SESSION_RESPONSE", region, "StartSession",
-                "", json.dumps(request), ssm.meta.endpoint_url,
-            ]
-            environment = dict(os.environ, AWS_SSM_START_SESSION_RESPONSE=json.dumps(payload))
-            with background(tunnel, env=environment, stdout=subprocess.DEVNULL) as process:
-                yield ["kubectl", "--kubeconfig", str(path)], process
-        finally:
-            try:
-                ssm.terminate_session(SessionId=response["SessionId"])
-            except ClientError as error:
-                # The plugin may already have closed it after receiving SIGTERM.
-                if error.response["Error"]["Code"] not in {"DoesNotExistException", "InvalidSessionId"}:
-                    raise
 
 
 def read_resource(kubectl, namespace, resource, *args):
@@ -194,24 +112,6 @@ def wait_for_rollout(kubectl, tunnel, namespace, image, revision, timeout):
                     return observed
         time.sleep(5)
     raise VerificationFailed(incomplete)
-
-
-@contextmanager
-def router_service(kubectl, namespace, directory):
-    output = directory / "forward.log"
-    command = [*kubectl, "-n", namespace, "port-forward", "--address", LOOPBACK, f"service/{ROUTER}", ":8080"]
-    # SPDY uses the create verb on pods/portforward.
-    with output.open("w") as log, background(
-        command, env=dict(os.environ, KUBECTL_PORT_FORWARD_WEBSOCKETS="false"), stdout=log,
-    ) as process:
-        deadline = time.monotonic() + 30
-        while process.poll() is None and time.monotonic() < deadline:
-            forwarding = FORWARDING.search(output.read_text())
-            if forwarding:
-                yield int(forwarding[1])
-                return
-            time.sleep(0.25)
-    raise VerificationFailed("Could not port-forward the private inference-router Service.")
 
 
 def request_json(port, path, payload=None):
@@ -291,7 +191,7 @@ def verify(args):
         directory = Path(workspace)
         with private_kubeconfig(directory, region, cluster, session_host) as (kubectl, tunnel):
             wait_for_rollout(kubectl, tunnel, namespace, args.image, args.revision, timeout=540)
-            with router_service(kubectl, namespace, directory) as port:
+            with router_service(kubectl, namespace, directory) as (port, _):
                 smoke_test(port)
             observed = wait_for_rollout(kubectl, tunnel, namespace, args.image, args.revision, timeout=30)
     print(f"{args.environment} verified {args.image} at Argo CD revision {observed} with {REPLICAS} Ready Pods.")
@@ -313,7 +213,7 @@ def main():
     signal.signal(signal.SIGTERM, cancel)
     try:
         verify(args)
-    except VerificationFailed as error:
+    except (VerificationFailed, TunnelError) as error:
         print(f"Verification failed. {error}", file=sys.stderr)
         return 1
     except ClientError as error:
